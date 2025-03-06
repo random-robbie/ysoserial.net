@@ -146,6 +146,8 @@
     </Reference>
     <Reference Include="System.configuration" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Data.Entity" />
+    <Reference Include="System.Data.Linq" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Drawing.Design" />
     <Reference Include="System.IdentityModel">
@@ -240,7 +242,7 @@
     <Compile Include="Helpers\ModifiedVulnerableBinaryFormatters\SimpleBinaryFormatterParser.cs" />
     <Compile Include="Helpers\ModifiedVulnerableBinaryFormatters\SimpleObjectLosFormatter.cs" />
     <Compile Include="Helpers\SerializersHelper.cs" />
-    <Compile Include="Generators\ActivitySurrogateDisableTypeCheck.cs" />
+    <Compile Include="Generators\ActivitySurrogateDisableTypeCheckGenerator.cs" />
     <Compile Include="Generators\ActivitySurrogateSelectorFromFileGenerator.cs" />
     <Compile Include="Generators\ActivitySurrogateSelectorGenerator.cs" />
     <Compile Include="Generators\IGenerator.cs" />

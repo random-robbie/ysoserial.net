@@ -430,7 +430,9 @@ namespace ysoserial
 
                 if (outputformat.ToLower().Contains("urlencode"))
                 {
-                    outputString = Uri.EscapeDataString(outputString);
+                    outputString = outputString.Replace("+", "%2B")
+                                 .Replace("/", "%2F")
+                                 .Replace("=", "%3D");
                 }
 
                 outputBytes = Encoding.ASCII.GetBytes(outputString);
@@ -442,7 +444,9 @@ namespace ysoserial
 
                 if (outputformat.ToLower().Contains("urlencode"))
                 {
-                    outputString = Uri.EscapeDataString(outputString);
+                    outputString = outputString.Replace("+", "%2B")
+                                 .Replace("/", "%2F")
+                                 .Replace("=", "%3D");
                 }
                 else if (outputformat.ToLower().Equals("hex")) {
                     outputBytes = Encoding.ASCII.GetBytes((String)outputString);
@@ -457,7 +461,9 @@ namespace ysoserial
                 if (outputformat.ToLower().Contains("urlencode"))
                 {
                     outputString = Encoding.UTF8.GetString((byte[])raw);
-                    outputString = Uri.EscapeDataString(outputString);
+                    outputString = outputString = outputString.Replace("+", "%2B")
+                                 .Replace("/", "%2F")
+                                 .Replace("=", "%3D");
                     outputBytes = Encoding.ASCII.GetBytes((String)outputString ?? "");
                 }
                 else if(outputformat.ToLower().Equals("hex"))

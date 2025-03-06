@@ -1,12 +1,14 @@
 ﻿using MessagePack;
 using MessagePack.Resolvers;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
 using Polenter.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.Serialization;
+using System.Runtime.Serialization.Formatters;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Runtime.Serialization.Formatters.Soap;
 using System.Runtime.Serialization.Json;
@@ -614,6 +616,18 @@ namespace ysoserial.Helpers
                 TypeNameHandling = TypeNameHandling.Auto
             });
             return text;
+        }
+
+        public static string JsonNet_serialize(object myobj, JsonSerializerSettings settings)
+        {
+            string text = JsonConvert.SerializeObject(myobj, settings);
+            return text;
+        }
+
+        public static object JsonNet_deserialize(string str, JsonSerializerSettings settings)
+        {
+            Object obj = JsonConvert.DeserializeObject<Object>(str, settings);
+            return obj;
         }
 
         public static object JsonNet_deserialize(string str)

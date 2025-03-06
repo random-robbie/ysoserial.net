@@ -246,3 +246,5 @@ ysoserial/Helpers/TestingArena/
 
 # Rider
 .idea
+ysoserial/Helpers/TestingArena/TestingArenaHome.cs
+/ExploitClass/ExploitSamples

