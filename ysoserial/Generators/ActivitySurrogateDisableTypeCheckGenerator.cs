@@ -71,7 +71,7 @@ xmlns:r=""clr-namespace:System.Reflection;assembly=mscorlib"">
     <ObjectDataProvider x:Key=""setMethod"" ObjectInstance=""{x:Static c:ConfigurationManager.AppSettings}"" MethodName =""Set"">
         <ObjectDataProvider.MethodParameters>
             <s:String>microsoft:WorkflowComponentModel:DisableActivitySurrogateSelectorTypeCheck</s:String>
-            <s:String>false</s:String>
+            <s:String>true</s:String>
         </ObjectDataProvider.MethodParameters>
     </ObjectDataProvider>
 </ResourceDictionary>";
