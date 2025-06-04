@@ -1,0 +1,66 @@
+name: Universal Windows Platform
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:  # Enable manual triggering
+    inputs:
+      build_configuration:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+        - Release
+        - Debug
+      build_platform:
+        description: 'Build platform'
+        required: false
+        default: 'x86|x64|ARM'
+        type: string
+
+env:
+  SOLUTION: '**/*.sln'
+  BUILD_PLATFORM: ${{ inputs.build_platform || 'x86|x64|ARM' }}
+  BUILD_CONFIGURATION: ${{ inputs.build_configuration || 'Release' }}
+
+jobs:
+  build:
+    runs-on: windows-latest  # Uses Windows Server 2022 with VS2022
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v1
+      
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+      
+    - name: Restore NuGet packages
+      run: nuget restore $env:SOLUTION
+      
+    - name: Build UWP application
+      run: |
+        msbuild $env:SOLUTION `
+          /p:Platform="x86" `
+          /p:Configuration="$env:BUILD_CONFIGURATION" `
+          /p:AppxBundlePlatforms="$env:BUILD_PLATFORM" `
+          /p:AppxPackageDir="${{ github.workspace }}\AppxPackages\" `
+          /p:AppxBundle=Always `
+          /p:UapAppxPackageBuildMode=StoreUpload
+      
+    - name: Copy build artifacts
+      run: |
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\staging"
+        Copy-Item -Path "${{ github.workspace }}\*" -Destination "${{ github.workspace }}\staging" -Recurse -Force
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: uwp-build-${{ github.sha }}
+        path: ${{ github.workspace }}\staging
+        retention-days: 30
