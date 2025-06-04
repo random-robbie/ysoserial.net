@@ -1,4 +1,21 @@
-on: [push, pull_request]
+on: 
+  push:
+  pull_request:
+  workflow_dispatch:  # Enables manual triggering from GitHub UI
+    inputs:
+      build_config:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+        - Release
+        - Debug
+      upload_artifact:
+        description: 'Upload build artifact'
+        required: false
+        default: true
+        type: boolean
 
 name: Build
 
@@ -6,7 +23,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4  # Updated to latest version
       - name: Setup Nuget.exe
         uses: nuget/setup-nuget@v1
       - name: Restore packages
@@ -14,12 +31,13 @@ jobs:
       - name: Setup MSBuild.exe
         uses: microsoft/setup-msbuild@v1.1
       - name: Build with MSBuild
-        run: msbuild ysoserial.sln -p:Configuration=Release
+        run: msbuild ysoserial.sln -p:Configuration=${{ inputs.build_config || 'Release' }}
       - name: Prepare build artifact for stashing
         run: |
           mkdir release
-          move D:\a\ysoserial.net\ysoserial.net\ysoserial\bin\Release .\release
+          move D:\a\ysoserial.net\ysoserial.net\ysoserial\bin\${{ inputs.build_config || 'Release' }} .\release
       - name: Upload artifact
+        if: ${{ inputs.upload_artifact != false }}  # Only upload if not explicitly disabled
         uses: actions/upload-artifact@v4.0.0
         with:
           name: ysoserial-${{ github.sha }}
